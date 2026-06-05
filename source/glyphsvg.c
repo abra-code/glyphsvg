@@ -366,6 +366,22 @@ static double resolveMaterialWeight(const char *weightFlag, const char *weightNa
     return 400.0;
 }
 
+// Resolves the FILL axis value (0-1) for material mode. The --fill flag may be
+// given bare (treated as 1.0) or as --fill=<value>; absent means 0.0 (outline).
+static double resolveMaterialFill(const char *fillFlag) {
+    if (fillFlag == NULL) return 0.0;
+    if (fillFlag[0] == '\0') return 1.0; // bare --fill
+    char *end;
+    double v = strtod(fillFlag, &end);
+    if (*end != '\0') {
+        fprintf(stderr, "Warning: invalid --fill '%s', using filled (1)\n", fillFlag);
+        return 1.0;
+    }
+    if (v < 0.0) return 0.0;
+    if (v > 1.0) return 1.0;
+    return v;
+}
+
 static int isRegularFile(const char *path) {
     struct stat st;
     return stat(path, &st) == 0 && S_ISREG(st.st_mode);
@@ -426,7 +442,17 @@ static uint32_t getMaterialCodepoint(const char *codepointsPath, const char *nam
 
 // Loads a Material Symbols variable font from a file, applying the requested
 // wght axis value to the returned instance.
-static CTFontRef createMaterialFont(const char *ttfPath, double weight) {
+// Adds a single variation axis (identified by its four-char tag) to a mutable
+// variation dictionary.
+static void setVariationAxis(CFMutableDictionaryRef variation, int32_t tag, double value) {
+    CFNumberRef key = CFNumberCreate(NULL, kCFNumberSInt32Type, &tag);
+    CFNumberRef val = CFNumberCreate(NULL, kCFNumberDoubleType, &value);
+    CFDictionarySetValue(variation, key, val);
+    CFRelease(key);
+    CFRelease(val);
+}
+
+static CTFontRef createMaterialFont(const char *ttfPath, double weight, double fill) {
     CFStringRef pathStr = CFStringCreateWithCString(NULL, ttfPath, kCFStringEncodingUTF8);
     if (pathStr == NULL) return NULL;
     CFURLRef url = CFURLCreateWithFileSystemPath(NULL, pathStr, kCFURLPOSIXPathStyle, false);
@@ -442,15 +468,11 @@ static CTFontRef createMaterialFont(const char *ttfPath, double weight) {
     }
     CTFontDescriptorRef baseDesc = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descriptors, 0);
 
-    // Build a variation dictionary for the wght axis (four-char code 'wght').
-    int32_t wghtTag = 0x77676874; // 'wght'
-    CFNumberRef axisKey = CFNumberCreate(NULL, kCFNumberSInt32Type, &wghtTag);
-    CFNumberRef axisVal = CFNumberCreate(NULL, kCFNumberDoubleType, &weight);
-    CFMutableDictionaryRef variation = CFDictionaryCreateMutable(NULL, 1,
+    // Material Symbols variation axes: 'wght' (100-700) and 'FILL' (0-1).
+    CFMutableDictionaryRef variation = CFDictionaryCreateMutable(NULL, 2,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    CFDictionarySetValue(variation, axisKey, axisVal);
-    CFRelease(axisKey);
-    CFRelease(axisVal);
+    setVariationAxis(variation, 0x77676874, weight); // 'wght'
+    setVariationAxis(variation, 0x46494C4C, fill);   // 'FILL'
 
     CFMutableDictionaryRef attrs = CFDictionaryCreateMutable(NULL, 1,
             &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -481,10 +503,11 @@ static void printUsage(const char *prog) {
     fprintf(stderr, "  Example: %s --font=Helvetica U+1F600 100 --output=/path/to/file.svg\n", prog);
     fprintf(stderr, "  Codepoint format: U+XXXX or 0xXXXX\n");
     fprintf(stderr, "\n");
-    fprintf(stderr, "  Material Symbols mode: %s --material[=<style>] <name> [<weight>] <size> [--weight=<N>] [--output=<path>]\n", prog);
+    fprintf(stderr, "  Material Symbols mode: %s --material[=<style>] <name> [<weight>] <size> [--weight=<N>] [--fill[=<0..1>]] [--output=<path>]\n", prog);
     fprintf(stderr, "  Styles: outlined (default), rounded, sharp\n");
     fprintf(stderr, "  Weight: black, bold, heavy, light, medium, regular, semibold, thin, ultralight or numeric 100-700 via --weight=<N>\n");
-    fprintf(stderr, "  Example: %s --material=rounded settings bold 256 --output=settings.svg\n", prog);
+    fprintf(stderr, "  Fill:   --fill (solid) or --fill=<0..1> (partial) for the FILL axis; default is outline\n");
+    fprintf(stderr, "  Example: %s --material favorite 256 --fill --output=favorite.svg\n", prog);
     fprintf(stderr, "  Run ./material/download.sh once to fetch the fonts and codepoints.\n");
 }
 
@@ -514,6 +537,7 @@ int main(int argc, const char *argv[]) {
     int materialMode = 0;
     const char *materialStyleArg = NULL;
     const char *weightFlag = NULL;
+    const char *fillFlag = NULL;
 
     const char *positionals[8];
     int nPos = 0;
@@ -530,6 +554,10 @@ int main(int argc, const char *argv[]) {
             materialMode = 1;
         } else if (strncmp(argv[i], "--weight=", 9) == 0) {
             weightFlag = argv[i] + 9;
+        } else if (strncmp(argv[i], "--fill=", 7) == 0) {
+            fillFlag = argv[i] + 7;
+        } else if (strcmp(argv[i], "--fill") == 0) {
+            fillFlag = ""; // bare --fill => fully filled
         } else if (nPos < (int)(sizeof(positionals) / sizeof(positionals[0]))) {
             positionals[nPos++] = argv[i];
         } else {
@@ -593,6 +621,7 @@ int main(int argc, const char *argv[]) {
     int isCodepointInput = 0;
     char ttfPath[1024] = {0};
     double materialWeight = 400.0;
+    double materialFill = 0.0;
 
     if (isCustomFontMode) {
         codepoint = parseCodepoint(charInput);
@@ -619,8 +648,9 @@ int main(int argc, const char *argv[]) {
             return 1;
         }
         materialWeight = resolveMaterialWeight(weightFlag, weightName);
-        fprintf(stderr, "Codepoint: 0x%lX  style: %s  weight: %.0f\n",
-                (unsigned long)codepoint, style, materialWeight);
+        materialFill = resolveMaterialFill(fillFlag);
+        fprintf(stderr, "Codepoint: 0x%lX  style: %s  weight: %.0f  fill: %.2f\n",
+                (unsigned long)codepoint, style, materialWeight, materialFill);
     } else {
         loadMappingsDict();
         codepoint = getCodepointForName(name);
@@ -633,7 +663,7 @@ int main(int argc, const char *argv[]) {
 
     CTFontRef font;
     if (materialMode) {
-        font = createMaterialFont(ttfPath, materialWeight);
+        font = createMaterialFont(ttfPath, materialWeight, materialFill);
     } else {
         font = createFont(customFont, weightName);
     }

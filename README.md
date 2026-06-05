@@ -37,6 +37,7 @@ Then extract by name:
 ./build/bin/glyphsvg --material home 256 --output=home.svg
 ./build/bin/glyphsvg --material=rounded settings bold 256 --output=settings.svg
 ./build/bin/glyphsvg --material=sharp star 256 --weight=600 --output=./icons/
+./build/bin/glyphsvg --material favorite 256 --fill --output=favorite.svg
 ```
 
 Arguments: `--material[=<style>] <name> [<weight>] <size>`
@@ -47,6 +48,8 @@ Arguments: `--material[=<style>] <name> [<weight>] <size>`
   explicit numeric value with `--weight=<N>`. Both map onto the font's `wght`
   variation axis (clamped to Material's 100–700 range; `heavy`/`black` clamp to 700).
   Defaults to `regular` (400).
+- **Fill** via the `FILL` variation axis: `--fill` renders the solid variant, or
+  `--fill=<0..1>` a partial fill. Defaults to outline (`0`).
 - When the output is a directory, the file is named after the symbol (e.g. `home.svg`).
 
 The tool locates the downloaded data in `material/` relative to the executable.

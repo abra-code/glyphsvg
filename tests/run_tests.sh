@@ -62,6 +62,12 @@ if [ -f "./material/MaterialSymbolsOutlined.codepoints" ]; then
     mkdir -p "$TEST_DIR/material"
     ./build/bin/glyphsvg --material=sharp favorite 100 --output="$TEST_DIR/material/"
     test -f "$TEST_DIR/material/favorite.svg" && echo "PASS" || echo "FAIL"
+
+    echo ""
+    echo "=== Test 11: Material - --fill changes the outline (FILL axis) ==="
+    ./build/bin/glyphsvg --material favorite 100 --output="$TEST_DIR/fav_out.svg"
+    ./build/bin/glyphsvg --material favorite 100 --fill --output="$TEST_DIR/fav_fill.svg"
+    if cmp -s "$TEST_DIR/fav_out.svg" "$TEST_DIR/fav_fill.svg"; then echo "FAIL"; else echo "PASS"; fi
 else
     echo ""
     echo "=== Material tests skipped (run ./material/download.sh first) ==="
