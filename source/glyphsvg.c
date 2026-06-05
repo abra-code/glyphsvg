@@ -9,19 +9,31 @@
 
 static CFDictionaryRef mappingsDict = NULL;
 
-static void loadMappingsDict(void) {
+// Writes the directory containing the running executable into buf.
+// Returns 1 on success, 0 on failure.
+static int getExeDir(char *buf, size_t size) {
     char exePath[1024];
     uint32_t exePathSize = sizeof(exePath);
     if (_NSGetExecutablePath(exePath, &exePathSize) != 0) {
-        return;
+        return 0;
     }
     char *slash = strrchr(exePath, '/');
     if (slash == NULL) {
-        return;
+        return 0;
     }
     *slash = '\0';
+    strncpy(buf, exePath, size - 1);
+    buf[size - 1] = '\0';
+    return 1;
+}
+
+static void loadMappingsDict(void) {
+    char exeDir[1024];
+    if (!getExeDir(exeDir, sizeof(exeDir))) {
+        return;
+    }
     char plistPath[1024];
-    snprintf(plistPath, sizeof(plistPath), "%s/sfmap.plist", exePath);
+    snprintf(plistPath, sizeof(plistPath), "%s/sfmap.plist", exeDir);
     FILE *plistFile = fopen(plistPath, "rb");
     if (plistFile == NULL) {
         return;
@@ -281,6 +293,183 @@ static char *pathToSVG(CGPathRef path) {
     return svgBuffer;
 }
 
+// ----- Google Material Symbols support -----
+
+static const char *materialStyles[] = { "Outlined", "Rounded", "Sharp", NULL };
+
+// Returns the canonical capitalized style name, or NULL if invalid.
+// A NULL or empty input defaults to "Outlined".
+static const char *resolveMaterialStyle(const char *style) {
+    if (style == NULL || style[0] == '\0') {
+        return materialStyles[0];
+    }
+    for (int i = 0; materialStyles[i] != NULL; i++) {
+        if (strcasecmp(style, materialStyles[i]) == 0) {
+            return materialStyles[i];
+        }
+    }
+    return NULL;
+}
+
+typedef struct { const char *name; double value; } WeightName;
+
+// SF Symbols-style weight names mapped to approximate numeric font weights
+// (Apple SF Pro numerics). Material's wght axis only spans 100-700, so heavy
+// and black are clamped down at use sites.
+static const WeightName weightNames[] = {
+    {"ultralight", 100}, {"thin", 200}, {"light", 300}, {"regular", 400},
+    {"medium", 500}, {"semibold", 600}, {"bold", 700}, {"heavy", 800},
+    {"black", 900}, {NULL, 0}
+};
+
+static double weightNameToValue(const char *name) {
+    if (name == NULL) return 0;
+    for (int i = 0; weightNames[i].name != NULL; i++) {
+        if (strcasecmp(name, weightNames[i].name) == 0) {
+            return weightNames[i].value;
+        }
+    }
+    return 0;
+}
+
+// Material Symbols wght axis range.
+#define MATERIAL_WEIGHT_MIN 100.0
+#define MATERIAL_WEIGHT_MAX 700.0
+
+static double clampMaterialWeight(double w) {
+    if (w < MATERIAL_WEIGHT_MIN) return MATERIAL_WEIGHT_MIN;
+    if (w > MATERIAL_WEIGHT_MAX) return MATERIAL_WEIGHT_MAX;
+    return w;
+}
+
+// Resolves the numeric weight for material mode from the explicit --weight=
+// flag (numeric or named) and/or a positional named weight, defaulting to
+// regular (400). The result is clamped to the Material wght axis range.
+static double resolveMaterialWeight(const char *weightFlag, const char *weightName) {
+    if (weightFlag != NULL && weightFlag[0] != '\0') {
+        char *end;
+        double v = strtod(weightFlag, &end);
+        if (*end == '\0') {
+            return clampMaterialWeight(v);
+        }
+        double nv = weightNameToValue(weightFlag);
+        if (nv > 0) return clampMaterialWeight(nv);
+        fprintf(stderr, "Warning: unknown --weight '%s', using regular (400)\n", weightFlag);
+        return 400.0;
+    }
+    if (weightName != NULL && weightName[0] != '\0') {
+        double nv = weightNameToValue(weightName);
+        if (nv > 0) return clampMaterialWeight(nv);
+        fprintf(stderr, "Warning: unknown weight '%s', using regular (400)\n", weightName);
+        return 400.0;
+    }
+    return 400.0;
+}
+
+static int isRegularFile(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+// Locates the material data directory for the given canonical style, filling in
+// the codepoints and ttf paths. Searches an env override, locations relative to
+// the executable, then the current directory. Returns 1 on success.
+static int findMaterialFiles(const char *style, char *cpOut, size_t cpSize, char *ttfOut, size_t ttfSize) {
+    char exeDir[1024] = {0};
+    getExeDir(exeDir, sizeof(exeDir));
+
+    char candidates[8][1024];
+    int n = 0;
+    const char *env = getenv("GLYPHSVG_MATERIAL_DIR");
+    if (env != NULL && env[0] != '\0') {
+        snprintf(candidates[n++], sizeof(candidates[0]), "%s", env);
+    }
+    if (exeDir[0] != '\0') {
+        snprintf(candidates[n++], sizeof(candidates[0]), "%s/material", exeDir);
+        snprintf(candidates[n++], sizeof(candidates[0]), "%s/../material", exeDir);
+        snprintf(candidates[n++], sizeof(candidates[0]), "%s/../../material", exeDir);
+    }
+    snprintf(candidates[n++], sizeof(candidates[0]), "./material");
+
+    for (int i = 0; i < n; i++) {
+        char cp[1024];
+        snprintf(cp, sizeof(cp), "%s/MaterialSymbols%s.codepoints", candidates[i], style);
+        if (isRegularFile(cp)) {
+            snprintf(cpOut, cpSize, "%s", cp);
+            snprintf(ttfOut, ttfSize, "%s/MaterialSymbols%s.ttf", candidates[i], style);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Looks up a symbol name in a Material .codepoints file (lines of
+// "name hexcodepoint"), returning its codepoint or 0 if not found.
+static uint32_t getMaterialCodepoint(const char *codepointsPath, const char *name) {
+    FILE *fp = fopen(codepointsPath, "r");
+    if (fp == NULL) {
+        fprintf(stderr, "Error: Cannot open %s\n", codepointsPath);
+        return 0;
+    }
+    size_t nameLen = strlen(name);
+    char line[256];
+    uint32_t codepoint = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, name, nameLen) == 0 && line[nameLen] == ' ') {
+            codepoint = (uint32_t)strtoul(line + nameLen + 1, NULL, 16);
+            break;
+        }
+    }
+    fclose(fp);
+    return codepoint;
+}
+
+// Loads a Material Symbols variable font from a file, applying the requested
+// wght axis value to the returned instance.
+static CTFontRef createMaterialFont(const char *ttfPath, double weight) {
+    CFStringRef pathStr = CFStringCreateWithCString(NULL, ttfPath, kCFStringEncodingUTF8);
+    if (pathStr == NULL) return NULL;
+    CFURLRef url = CFURLCreateWithFileSystemPath(NULL, pathStr, kCFURLPOSIXPathStyle, false);
+    CFRelease(pathStr);
+    if (url == NULL) return NULL;
+
+    CFArrayRef descriptors = CTFontManagerCreateFontDescriptorsFromURL(url);
+    CFRelease(url);
+    if (descriptors == NULL || CFArrayGetCount(descriptors) == 0) {
+        if (descriptors != NULL) CFRelease(descriptors);
+        fprintf(stderr, "Error: Could not load font from %s\n", ttfPath);
+        return NULL;
+    }
+    CTFontDescriptorRef baseDesc = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descriptors, 0);
+
+    // Build a variation dictionary for the wght axis (four-char code 'wght').
+    int32_t wghtTag = 0x77676874; // 'wght'
+    CFNumberRef axisKey = CFNumberCreate(NULL, kCFNumberSInt32Type, &wghtTag);
+    CFNumberRef axisVal = CFNumberCreate(NULL, kCFNumberDoubleType, &weight);
+    CFMutableDictionaryRef variation = CFDictionaryCreateMutable(NULL, 1,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(variation, axisKey, axisVal);
+    CFRelease(axisKey);
+    CFRelease(axisVal);
+
+    CFMutableDictionaryRef attrs = CFDictionaryCreateMutable(NULL, 1,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(attrs, kCTFontVariationAttribute, variation);
+    CFRelease(variation);
+
+    CTFontDescriptorRef varDesc = CTFontDescriptorCreateCopyWithAttributes(baseDesc, attrs);
+    CFRelease(attrs);
+    CFRelease(descriptors);
+    if (varDesc == NULL) {
+        fprintf(stderr, "Error: Could not apply variation to font\n");
+        return NULL;
+    }
+
+    CTFontRef font = CTFontCreateWithFontDescriptor(varDesc, 12.0, NULL);
+    CFRelease(varDesc);
+    return font;
+}
+
 static void printUsage(const char *prog) {
     fprintf(stderr, "Usage:\n");
     fprintf(stderr, "  SF Symbols mode: %s <name> <weight> <size> [--output=<path>]\n", prog);
@@ -291,6 +480,12 @@ static void printUsage(const char *prog) {
     fprintf(stderr, "  Example: %s --font=Helvetica \"Hello\" 100 --output=/path/to/file.svg\n", prog);
     fprintf(stderr, "  Example: %s --font=Helvetica U+1F600 100 --output=/path/to/file.svg\n", prog);
     fprintf(stderr, "  Codepoint format: U+XXXX or 0xXXXX\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "  Material Symbols mode: %s --material[=<style>] <name> [<weight>] <size> [--weight=<N>] [--output=<path>]\n", prog);
+    fprintf(stderr, "  Styles: outlined (default), rounded, sharp\n");
+    fprintf(stderr, "  Weight: black, bold, heavy, light, medium, regular, semibold, thin, ultralight or numeric 100-700 via --weight=<N>\n");
+    fprintf(stderr, "  Example: %s --material=rounded settings bold 256 --output=settings.svg\n", prog);
+    fprintf(stderr, "  Run ./material/download.sh once to fetch the fonts and codepoints.\n");
 }
 
 static uint32_t parseCodepoint(const char *str) {
@@ -314,59 +509,120 @@ static uint32_t parseCodepoint(const char *str) {
 }
 
 int main(int argc, const char *argv[]) {
-    const char *name = NULL;
-    const char *weight = NULL;
     const char *customFont = NULL;
-    const char *charInput = NULL;
-    double size = 0;
     const char *output = NULL;
-    
+    int materialMode = 0;
+    const char *materialStyleArg = NULL;
+    const char *weightFlag = NULL;
+
+    const char *positionals[8];
+    int nPos = 0;
+
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "--font=", 7) == 0) {
             customFont = argv[i] + 7;
         } else if (strncmp(argv[i], "--output=", 9) == 0) {
             output = argv[i] + 9;
-        } else if (name == NULL) {
-            name = argv[i];
-        } else if (weight == NULL && customFont == NULL) {
-            weight = argv[i];
-        } else if (size == 0) {
-            size = strtod(argv[i], NULL);
+        } else if (strncmp(argv[i], "--material=", 11) == 0) {
+            materialMode = 1;
+            materialStyleArg = argv[i] + 11;
+        } else if (strcmp(argv[i], "--material") == 0) {
+            materialMode = 1;
+        } else if (strncmp(argv[i], "--weight=", 9) == 0) {
+            weightFlag = argv[i] + 9;
+        } else if (nPos < (int)(sizeof(positionals) / sizeof(positionals[0]))) {
+            positionals[nPos++] = argv[i];
         } else {
             fprintf(stderr, "Too many arguments\n");
             printUsage(argv[0]);
             return 1;
         }
     }
-    
+
+    if (customFont != NULL && materialMode) {
+        fprintf(stderr, "Error: --font and --material cannot be combined\n");
+        return 1;
+    }
+
+    const char *name = NULL;
+    const char *weightName = NULL;
+    const char *charInput = NULL;
+    double size = 0;
+
     int isCustomFontMode = (customFont != NULL);
-    
+
     if (isCustomFontMode) {
-        if (name == NULL || size <= 0) {
+        if (nPos < 2) {
             fprintf(stderr, "Usage: %s --font=<name> <characters|codepoint> <size> [--output=<path>]\n", argv[0]);
             fprintf(stderr, "Example: %s --font=Helvetica \"Hello\" 100 --output=/path/to/file.svg\n", argv[0]);
             return 1;
         }
-        charInput = name;
-    } else {
-        if (name == NULL || weight == NULL || size <= 0) {
+        charInput = positionals[0];
+        size = strtod(positionals[1], NULL);
+    } else if (materialMode) {
+        // --material[=style] <name> [<weight>] <size>
+        if (nPos == 3) {
+            name = positionals[0];
+            weightName = positionals[1];
+            size = strtod(positionals[2], NULL);
+        } else if (nPos == 2) {
+            name = positionals[0];
+            size = strtod(positionals[1], NULL);
+        } else {
             printUsage(argv[0]);
             return 1;
         }
+    } else {
+        // SF Symbols: <name> <weight> <size>
+        if (nPos != 3) {
+            printUsage(argv[0]);
+            return 1;
+        }
+        name = positionals[0];
+        weightName = positionals[1];
+        size = strtod(positionals[2], NULL);
     }
-    
-    loadMappingsDict();
-    
+
+    if (size <= 0) {
+        fprintf(stderr, "Error: invalid or missing size\n");
+        printUsage(argv[0]);
+        return 1;
+    }
+
     uint32_t codepoint = 0;
     int isCodepointInput = 0;
-    
+    char ttfPath[1024] = {0};
+    double materialWeight = 400.0;
+
     if (isCustomFontMode) {
         codepoint = parseCodepoint(charInput);
         if (codepoint > 0) {
             isCodepointInput = 1;
             fprintf(stderr, "Codepoint: 0x%lX\n", (unsigned long)codepoint);
         }
+    } else if (materialMode) {
+        const char *style = resolveMaterialStyle(materialStyleArg);
+        if (style == NULL) {
+            fprintf(stderr, "Error: Unknown material style '%s'\n", materialStyleArg);
+            fprintf(stderr, "Valid styles: outlined, rounded, sharp\n");
+            return 1;
+        }
+        char cpPath[1024];
+        if (!findMaterialFiles(style, cpPath, sizeof(cpPath), ttfPath, sizeof(ttfPath))) {
+            fprintf(stderr, "Error: Material data not found. Run ./material/download.sh to fetch it,\n");
+            fprintf(stderr, "       or set GLYPHSVG_MATERIAL_DIR to the directory containing the files.\n");
+            return 1;
+        }
+        codepoint = getMaterialCodepoint(cpPath, name);
+        if (codepoint == 0) {
+            fprintf(stderr, "Error: Unknown material symbol '%s'\n", name);
+            return 1;
+        }
+        materialWeight = resolveMaterialWeight(weightFlag, weightName);
+        fprintf(stderr, "Codepoint: 0x%lX  style: %s  weight: %.0f\n",
+                (unsigned long)codepoint, style, materialWeight);
     } else {
+        loadMappingsDict();
         codepoint = getCodepointForName(name);
         if (codepoint == 0) {
             fprintf(stderr, "Error: Unknown symbol '%s'\n", name);
@@ -374,8 +630,13 @@ int main(int argc, const char *argv[]) {
         }
         fprintf(stderr, "Codepoint: 0x%lX\n", (unsigned long)codepoint);
     }
-    
-    CTFontRef font = createFont(customFont, weight);
+
+    CTFontRef font;
+    if (materialMode) {
+        font = createMaterialFont(ttfPath, materialWeight);
+    } else {
+        font = createFont(customFont, weightName);
+    }
     if (font == NULL) {
         return 1;
     }
@@ -455,8 +716,19 @@ int main(int argc, const char *argv[]) {
         CGPathRelease(scaledPath);
         
         int printToStdout = (output == NULL && numChars == 1);
-        
-        if (output != NULL && numChars == 1) {
+
+        // Does --output point to a directory (trailing slash or existing dir)?
+        int outputIsDir = 0;
+        if (output != NULL) {
+            struct stat ost;
+            size_t olen = strlen(output);
+            if ((olen > 0 && output[olen - 1] == '/') ||
+                (stat(output, &ost) == 0 && S_ISDIR(ost.st_mode))) {
+                outputIsDir = 1;
+            }
+        }
+
+        if (output != NULL && !outputIsDir && numChars == 1) {
             FILE *fp = fopen(output, "w");
             if (fp == NULL) {
                 fprintf(stderr, "Error: Cannot open file %s for writing\n", output);
@@ -492,6 +764,8 @@ int main(int argc, const char *argv[]) {
                 }
                 if (isCustomFontMode) {
                     snprintf(filename, sizeof(filename), "%s%s_%d.svg", dir_path, charLabel, charIdx);
+                } else if (materialMode) {
+                    snprintf(filename, sizeof(filename), "%s%s.svg", dir_path, name);
                 } else {
                     snprintf(filename, sizeof(filename), "%sU+%04lX.svg", dir_path, (unsigned long)codepoint);
                 }

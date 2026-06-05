@@ -40,5 +40,32 @@ echo "=== Test 6: SF Symbols - to stdout ==="
 ./build/bin/glyphsvg star bold 100 > "$TEST_DIR/star.svg"
 test -f "$TEST_DIR/star.svg" && echo "PASS" || echo "FAIL"
 
+if [ -f "./material/MaterialSymbolsOutlined.codepoints" ]; then
+    echo ""
+    echo "=== Test 7: Material - default style to file ==="
+    ./build/bin/glyphsvg --material home 100 --output="$TEST_DIR/home.svg"
+    test -f "$TEST_DIR/home.svg" && echo "PASS" || echo "FAIL"
+
+    echo ""
+    echo "=== Test 8: Material - rounded + named weight, to file ==="
+    ./build/bin/glyphsvg --material=rounded settings bold 100 --output="$TEST_DIR/settings.svg"
+    test -f "$TEST_DIR/settings.svg" && echo "PASS" || echo "FAIL"
+
+    echo ""
+    echo "=== Test 9: Material - numeric --weight changes outline ==="
+    ./build/bin/glyphsvg --material home 100 --weight=100 --output="$TEST_DIR/home_w100.svg"
+    ./build/bin/glyphsvg --material home 100 --weight=700 --output="$TEST_DIR/home_w700.svg"
+    if cmp -s "$TEST_DIR/home_w100.svg" "$TEST_DIR/home_w700.svg"; then echo "FAIL"; else echo "PASS"; fi
+
+    echo ""
+    echo "=== Test 10: Material - directory output named by symbol ==="
+    mkdir -p "$TEST_DIR/material"
+    ./build/bin/glyphsvg --material=sharp favorite 100 --output="$TEST_DIR/material/"
+    test -f "$TEST_DIR/material/favorite.svg" && echo "PASS" || echo "FAIL"
+else
+    echo ""
+    echo "=== Material tests skipped (run ./material/download.sh first) ==="
+fi
+
 echo ""
 echo "=== All tests completed ==="
