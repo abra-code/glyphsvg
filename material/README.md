@@ -19,6 +19,13 @@ This populates this directory with, for each style (Outlined, Rounded, Sharp):
 - `MaterialSymbols<Style>.codepoints` — plain-text `name codepoint` map
 - `MaterialSymbols<Style>.ttf` — the variable font used to render glyphs
 
+It also fetches, once (style-independent):
+
+- `material_symbols_metadata.json` — Google's per-symbol search metadata
+  (`tags`, `categories`, `popularity`, `codepoint`) for all ~6,090 symbols, from
+  `https://fonts.google.com/metadata/icons`. Used by the SF -> Material name-mapping
+  pipeline (`../mapping/`) to find candidates by concept/tag, not just by name.
+
 ## File Formats
 
 ### `MaterialSymbols<Style>.codepoints`
@@ -29,3 +36,9 @@ design (font file).
 
 ### `MaterialSymbols<Style>.ttf`
 Material Symbols variable font with axes `FILL`, `GRAD`, `opsz`, `wght`.
+
+### `material_symbols_metadata.json`
+JSON `{"icons":[{"name","tags":[...],"categories":[...],"popularity","codepoint"}, ...]}`.
+The endpoint guards its response with an XSSI `)]}'` prefix; `download.sh` strips
+it. Not every listed icon exists in the variable font, so intersect names with
+the `.codepoints` set before rendering.

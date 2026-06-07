@@ -1,4 +1,8 @@
 .DS_Store
 build
+
+# large upstream font assets (fetched by material/download.sh)
 material/*.ttf
 material/*.codepoints
+material/material_symbols_metadata.json
+

@@ -25,6 +25,15 @@ for style in "${STYLES[@]}"; do
     done
 done
 
+# Per-symbol search metadata (tags / synonyms / categories / popularity). Used by
+# the name-mapping pipeline to find candidates by concept, not just by name. The
+# response has an XSSI guard ")]}'" prefix which we strip to leave valid JSON.
+echo "Downloading material_symbols_metadata.json ..."
+META_URL="https://fonts.google.com/metadata/icons?key=material_symbols&incomplete=true"
+curl -fgL --retry 3 -o "${SCRIPT_DIR}/material_symbols_metadata.raw" "$META_URL"
+python3 -c "import sys; d=open('${SCRIPT_DIR}/material_symbols_metadata.raw').read(); open('${SCRIPT_DIR}/material_symbols_metadata.json','w').write(d[d.find('{'):])"
+rm -f "${SCRIPT_DIR}/material_symbols_metadata.raw"
+
 echo ""
 echo "Downloaded into ${SCRIPT_DIR}:"
 for style in "${STYLES[@]}"; do
