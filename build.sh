@@ -10,6 +10,13 @@ CLANG="/usr/bin/clang"
 STRIP="/usr/bin/strip"
 VERSION="7.2"
 
+# Minimum macOS version the binaries will run on. Without this, clang defaults
+# to the build machine's OS version, producing binaries that refuse to launch on
+# older systems. Override with: MIN_MACOS=12.0 ./build.sh
+# 11.0 is the floor for a universal binary: arm64 macOS starts there, so a lower
+# value only drops the x86_64 slice while arm64 silently clamps back to 11.0.
+MIN_MACOS="${MIN_MACOS:-11.0}"
+
 MODE="${1:-release}"
 MODE="$(echo "$MODE" | tr '[:upper:]' '[:lower:]')"
 
@@ -21,6 +28,7 @@ fi
 /bin/mkdir -p "$BIN_DIR"
 
 ARCHS="-arch arm64 -arch x86_64"
+DEPLOYMENT="-mmacosx-version-min=$MIN_MACOS"
 
 if [ "$MODE" = "release" ]; then
     CFLAGS="-O3"
@@ -28,8 +36,9 @@ else
     CFLAGS="-O0 -g"
 fi
 
+echo "Building for macOS $MIN_MACOS and later"
 echo "Building plist_generator ($MODE)..."
-"$CLANG" $ARCHS -o "$BIN_DIR/plist_generator" \
+"$CLANG" $ARCHS "$DEPLOYMENT" -o "$BIN_DIR/plist_generator" \
     "$SOURCE_DIR/plist_generator.c" \
     -framework CoreFoundation \
     $CFLAGS
@@ -45,7 +54,7 @@ echo "Generating sfmap.plist..."
     "$BIN_DIR/sfmap.plist"
 
 echo "Building glyphsvg ($MODE)..."
-"$CLANG" $ARCHS -o "$BIN_DIR/glyphsvg" \
+"$CLANG" $ARCHS "$DEPLOYMENT" -o "$BIN_DIR/glyphsvg" \
     "$SOURCE_DIR/glyphsvg.c" \
     -framework CoreText \
     -framework CoreFoundation \

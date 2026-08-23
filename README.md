@@ -8,6 +8,11 @@ Extract SVG paths from font glyphs on macOS.
 ./build.sh
 ```
 
+Produces universal (arm64 + x86_64) binaries in `build/bin/`. The deployment
+target defaults to macOS 11.0 regardless of the build machine's OS version;
+override it with `MIN_MACOS=12.0 ./build.sh` if you need a higher floor. Going
+lower has no effect on the arm64 slice, since macOS 11.0 is where arm64 begins.
+
 ## Usage
 
 ### SF Symbols (default mode)
