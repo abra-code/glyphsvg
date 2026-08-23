@@ -2,6 +2,8 @@
 
 Extract SVG paths from font glyphs on macOS.
 
+Print the version with `glyphsvg --version`.
+
 ## Build
 
 ```bash
@@ -82,3 +84,20 @@ Codepoint format: `U+XXXX` or `0xXXXX`
   (e.g. `U+0041.svg`)
 - With no `--output`, a single glyph is written to stdout
 - When extracting multiple characters, you must specify an output directory
+
+### Exit status
+
+- `0` - every requested glyph was written.
+- `1` - anything else: bad arguments, a font that is not installed, a symbol name
+  that is not in the map, a codepoint the font has no glyph for, or a path too
+  large to serialize.
+
+Nothing is written when extraction fails, so a `0` exit means the output files
+exist. Glyphs that exist but have no outline (spaces and other blanks inside a
+multi-character string) are skipped with a warning and do not fail the run,
+unless they leave nothing to write at all.
+
+The tool also refuses to fall back silently: an unknown `--font=` name is an
+error rather than a substituted system font, and Material Symbols extraction
+fails if CoreText hands back a different font family than the one loaded from
+disk.

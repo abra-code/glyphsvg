@@ -7,6 +7,8 @@
 #import <sys/stat.h>
 #import <mach-o/dyld.h>
 
+#define GLYPHSVG_VERSION "1.1"
+
 static CFDictionaryRef mappingsDict = NULL;
 
 // Writes the directory containing the running executable into buf.
@@ -96,10 +98,37 @@ static int isValidWeight(const char *weight) {
     return 0;
 }
 
+// CTFontCreateWithName never fails: an unknown name silently yields the system
+// default, which would then produce plausible SVGs from the wrong font. Ask the
+// descriptor machinery whether the name matches anything installed, so callers
+// can tell "not installed" from "installed" before trusting the result.
+static int fontNameIsInstalled(CFStringRef name) {
+    CTFontDescriptorRef requested = CTFontDescriptorCreateWithNameAndSize(name, 12.0);
+    if (requested == NULL) {
+        return 0;
+    }
+    CTFontDescriptorRef matched = CTFontDescriptorCreateMatchingFontDescriptor(requested, NULL);
+    CFRelease(requested);
+    if (matched == NULL) {
+        return 0;
+    }
+    CFRelease(matched);
+    return 1;
+}
+
 static CTFontRef createFont(const char *customFont, const char *weight) {
     CTFontRef font = NULL;
     if (customFont != NULL) {
         CFStringRef fontNameCF = CFStringCreateWithCString(NULL, customFont, kCFStringEncodingUTF8);
+        if (fontNameCF == NULL) {
+            fprintf(stderr, "Error: Font '%s' is not valid UTF-8\n", customFont);
+            return NULL;
+        }
+        if (!fontNameIsInstalled(fontNameCF)) {
+            fprintf(stderr, "Error: Font '%s' not found\n", customFont);
+            CFRelease(fontNameCF);
+            return NULL;
+        }
         font = CTFontCreateWithName(fontNameCF, 12.0, NULL);
         CFRelease(fontNameCF);
         if (font == NULL) {
@@ -126,8 +155,14 @@ static CTFontRef createFont(const char *customFont, const char *weight) {
             snprintf(fontName, sizeof(fontName), "SFProText-Regular");
         }
         CFStringRef fontNameCF = CFStringCreateWithCString(NULL, fontName, kCFStringEncodingUTF8);
-        font = CTFontCreateWithName(fontNameCF, 12.0, NULL);
-        CFRelease(fontNameCF);
+        // Only trust CTFontCreateWithName once the name is known to resolve.
+        // Without this the call always "succeeds" with a substituted system font,
+        // which left the SF Symbols fallback below unreachable on machines that
+        // do not have SF Pro installed.
+        if (fontNameCF != NULL && fontNameIsInstalled(fontNameCF)) {
+            font = CTFontCreateWithName(fontNameCF, 12.0, NULL);
+        }
+        if (fontNameCF != NULL) CFRelease(fontNameCF);
         if (font == NULL) {
             // Fallback: try loading from SF Symbols app bundle
             CFURLRef fontURL = CFURLCreateWithFileSystemPath(NULL, CFSTR("/Applications/SF Symbols.app/Contents/Resources/Fonts/SFSymbolsFallback.otf"), kCFURLPOSIXPathStyle, false);
@@ -225,6 +260,7 @@ typedef struct {
     char *buffer;
     size_t *offset;
     size_t bufferSize;
+    int truncated;
 } PathToSVGContext;
 
 // Function to apply to each element of the path
@@ -264,30 +300,35 @@ static void pathElementApplier(void *info, const CGPathElement *element) {
     
     if (n < 0) {
         // Mark buffer as full to avoid further writes
-        *offset = ctx->bufferSize;
+        ctx->truncated = 1;
+        *offset = ctx->bufferSize - 1;
+    } else if ((size_t)n >= bufferSize - *offset) {
+        // snprintf returns what it *would* have written, so this element did not
+        // fit. Record it here rather than inferring truncation from a clamped
+        // offset, which would also flag a path that filled the buffer exactly.
+        ctx->truncated = 1;
+        *offset = bufferSize - 1; // Leave room for null terminator
     } else {
         *offset += n;
-        if (*offset >= bufferSize) {
-            *offset = bufferSize - 1; // Leave room for null terminator
-        }
     }
 }
 
 // Convert CGPath to SVG path string
-static char *pathToSVG(CGPathRef path) {
+// Renders a CGPath as an SVG path 'd' string. On return *outTruncated is 1 if the
+// path did not fit the buffer, in which case the contents are unusable: a
+// truncated 'd' attribute is a corrupt SVG, so callers must not write it out.
+static char *pathToSVG(CGPathRef path, int *outTruncated) {
     // Use a static buffer for simplicity (not thread-safe, but acceptable for CLI tool)
     static char svgBuffer[50000];
     size_t svgOffset = 0;
-    PathToSVGContext context = {svgBuffer, &svgOffset, sizeof(svgBuffer)};
-    
+    PathToSVGContext context = {svgBuffer, &svgOffset, sizeof(svgBuffer), 0};
+
     CGPathApply(path, &context, pathElementApplier);
-    
-    // Null-terminate
-    if (svgOffset >= sizeof(svgBuffer) - 1) {
-        svgBuffer[sizeof(svgBuffer)-1] = '\0';
-        fprintf(stderr, "Warning: SVG path data truncated (exceeded %zu bytes)\n", sizeof(svgBuffer));
-    } else {
-        svgBuffer[svgOffset] = '\0';
+
+    svgBuffer[svgOffset] = '\0';
+    *outTruncated = context.truncated;
+    if (context.truncated) {
+        fprintf(stderr, "Error: SVG path data truncated (exceeded %zu bytes)\n", sizeof(svgBuffer));
     }
 
     return svgBuffer;
@@ -467,6 +508,16 @@ static CTFontRef createMaterialFont(const char *ttfPath, double weight, double f
         return NULL;
     }
     CTFontDescriptorRef baseDesc = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descriptors, 0);
+    // The family name the file declares, kept so the font CoreText hands back can
+    // be checked against it below. Family name, not PostScript name: instantiating
+    // a variable font at a given axis position legitimately changes the PostScript
+    // name (the descriptor reports the default named instance), while the family
+    // stays put.
+    CFStringRef wantedName = CTFontDescriptorCopyAttribute(baseDesc, kCTFontFamilyNameAttribute);
+    if (wantedName != NULL && CFGetTypeID(wantedName) != CFStringGetTypeID()) {
+        CFRelease(wantedName);
+        wantedName = NULL;
+    }
 
     // Material Symbols variation axes: 'wght' (100-700) and 'FILL' (0-1).
     CFMutableDictionaryRef variation = CFDictionaryCreateMutable(NULL, 2,
@@ -484,11 +535,38 @@ static CTFontRef createMaterialFont(const char *ttfPath, double weight, double f
     CFRelease(descriptors);
     if (varDesc == NULL) {
         fprintf(stderr, "Error: Could not apply variation to font\n");
+        if (wantedName != NULL) CFRelease(wantedName);
         return NULL;
     }
 
     CTFontRef font = CTFontCreateWithFontDescriptor(varDesc, 12.0, NULL);
     CFRelease(varDesc);
+    if (font == NULL) {
+        fprintf(stderr, "Error: Could not instantiate font from %s\n", ttfPath);
+        if (wantedName != NULL) CFRelease(wantedName);
+        return NULL;
+    }
+
+    // Descriptors from CTFontManagerCreateFontDescriptorsFromURL are not registered
+    // for descriptor matching, so a CoreText that declines this one substitutes a
+    // system font rather than failing. That font has glyphs at the wrong codepoints,
+    // so it would yield wrong output instead of an error. Verify the identity.
+    if (wantedName != NULL) {
+        CFStringRef gotName = CTFontCopyFamilyName(font);
+        if (gotName == NULL || CFStringCompare(gotName, wantedName, 0) != kCFCompareEqualTo) {
+            char got[256] = "(unknown)";
+            char wanted[256] = "(unknown)";
+            if (gotName != NULL) CFStringGetCString(gotName, got, sizeof(got), kCFStringEncodingUTF8);
+            CFStringGetCString(wantedName, wanted, sizeof(wanted), kCFStringEncodingUTF8);
+            fprintf(stderr, "Error: CoreText substituted font family '%s' for '%s' loaded from %s\n", got, wanted, ttfPath);
+            if (gotName != NULL) CFRelease(gotName);
+            CFRelease(wantedName);
+            CFRelease(font);
+            return NULL;
+        }
+        CFRelease(gotName);
+        CFRelease(wantedName);
+    }
     return font;
 }
 
@@ -509,6 +587,8 @@ static void printUsage(const char *prog) {
     fprintf(stderr, "  Fill:   --fill (solid) or --fill=<0..1> (partial) for the FILL axis; default is outline\n");
     fprintf(stderr, "  Example: %s --material favorite 256 --fill --output=favorite.svg\n", prog);
     fprintf(stderr, "  Run ./material/download.sh once to fetch the fonts and codepoints.\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "  --version   Print the version and exit\n");
 }
 
 static uint32_t parseCodepoint(const char *str) {
@@ -541,6 +621,13 @@ int main(int argc, const char *argv[]) {
 
     const char *positionals[8];
     int nPos = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--version") == 0) {
+            printf("%s\n", GLYPHSVG_VERSION);
+            return 0;
+        }
+    }
 
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "--font=", 7) == 0) {
@@ -680,6 +767,28 @@ int main(int argc, const char *argv[]) {
         numChars = countChars(charInput);
     }
     
+    // Per-glyph outcomes, so the exit status reflects what was actually written.
+    // A glyph the font does not contain (missing) is an error. A glyph that exists
+    // but has no outline (blank) is normal for whitespace inside a multi-character
+    // string, so it only matters when it leaves us with nothing to write at all.
+    int emitted = 0;
+    int missing = 0;
+    int blank = 0;
+    int failed = 0;
+
+    if (numChars > 1 && output != NULL) {
+        struct stat ost;
+        size_t olen = strlen(output);
+        int outIsDir = (olen > 0 && output[olen - 1] == '/') ||
+                       (stat(output, &ost) == 0 && S_ISDIR(ost.st_mode));
+        if (!outIsDir) {
+            fprintf(stderr, "Error: --output must be a directory when extracting %d glyphs; "
+                            "'%s' is a single file\n", numChars, output);
+            CFRelease(font);
+            return 1;
+        }
+    }
+
     for (int charIdx = 0; charIdx < numChars; charIdx++) {
         uint32_t cp = codepoint;
         char charLabel[32] = {0};
@@ -702,20 +811,24 @@ int main(int argc, const char *argv[]) {
         }
         
         if (glyph == 0) {
-            fprintf(stderr, "Warning: No glyph for codepoint 0x%lX, skipping\n", (unsigned long)cp);
+            fprintf(stderr, "Error: No glyph for codepoint 0x%lX in this font\n", (unsigned long)cp);
+            missing++;
             continue;
         }
         
         CGAffineTransform transform = CGAffineTransformIdentity;
         CGPathRef path = CTFontCreatePathForGlyph(font, glyph, &transform);
         if (path == NULL) {
-            fprintf(stderr, "Warning: Failed to create path for codepoint 0x%lX, skipping\n", (unsigned long)cp);
+            // No outline: whitespace and other blank glyphs land here.
+            fprintf(stderr, "Warning: Glyph for codepoint 0x%lX has no outline, skipping\n", (unsigned long)cp);
+            blank++;
             continue;
         }
         
         CGRect bounds = CGPathGetBoundingBox(path);
         if (bounds.size.width <= 0 || bounds.size.height <= 0) {
-            fprintf(stderr, "Warning: Invalid glyph bounds for %s, skipping\n", charLabel);
+            fprintf(stderr, "Warning: Empty glyph bounds for codepoint 0x%lX, skipping\n", (unsigned long)cp);
+            blank++;
             CGPathRelease(path);
             continue;
         }
@@ -742,8 +855,14 @@ int main(int argc, const char *argv[]) {
         }
         CGRect scaledBounds = CGPathGetBoundingBox(scaledPath);
         
-        char *svgd = pathToSVG(scaledPath);
+        int truncated = 0;
+        char *svgd = pathToSVG(scaledPath, &truncated);
         CGPathRelease(scaledPath);
+        if (truncated) {
+            fprintf(stderr, "Error: Refusing to write truncated SVG for codepoint 0x%lX\n", (unsigned long)cp);
+            failed++;
+            continue;
+        }
         
         int printToStdout = (output == NULL && numChars == 1);
 
@@ -767,9 +886,11 @@ int main(int argc, const char *argv[]) {
             }
             writeSVG(fp, size, scaledBounds, svgd);
             fclose(fp);
+            emitted++;
             printf("SVG saved to %s\n", output);
         } else if (printToStdout) {
             writeSVG(stdout, size, scaledBounds, svgd);
+            emitted++;
         } else {
             if (output == NULL) {
                 output = "./";
@@ -812,12 +933,25 @@ int main(int argc, const char *argv[]) {
             }
             writeSVG(fp, size, scaledBounds, svgd);
             fclose(fp);
-            
+            emitted++;
+
             printf("SVG saved to %s\n", filename);
         }
     }
     
     CFRelease(font);
-    
+
+    if (emitted == 0) {
+        fprintf(stderr, "Error: No SVG output produced from %d glyph(s): %d missing, %d blank, %d failed\n",
+                numChars, missing, blank, failed);
+        return 1;
+    }
+    if (missing > 0 || failed > 0) {
+        fprintf(stderr, "Error: %d of %d glyph(s) could not be extracted "
+                        "(%d missing, %d blank, %d failed); %d written\n",
+                missing + failed, numChars, missing, blank, failed, emitted);
+        return 1;
+    }
+
     return 0;
 }
