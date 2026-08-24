@@ -98,6 +98,14 @@ if [ -f "./material/MaterialSymbolsOutlined.codepoints" ]; then
     files_exist "$TEST_DIR/material/favorite.svg"
 
     echo ""
+    echo "=== Test 11a: Material - unknown symbol name exits nonzero ==="
+    if ./build/bin/glyphsvg --material no_such_symbol_xyz 64 >/dev/null 2>&1; then
+        echo "FAIL (exited 0)"
+    else
+        echo "PASS"
+    fi
+
+    echo ""
     echo "=== Test 11: Material - --fill changes the outline (FILL axis) ==="
     "$BIN_DIR/glyphsvg" --material favorite 100 --output="$TEST_DIR/fav_out.svg"
     "$BIN_DIR/glyphsvg" --material favorite 100 --fill --output="$TEST_DIR/fav_fill.svg"
@@ -444,6 +452,105 @@ if [ -f "$ASTRAL_FONT" ]; then
 else
     echo ""
     echo "=== Supplementary-plane tests skipped (STIXGeneral.otf not found) ==="
+fi
+
+# Exit-status tests, from the remote branch. Renumbered to follow the tests above
+# and routed through report() so a failure actually fails the suite. The suite runs
+# under `set -e`, so every command expected to fail is wrapped in an `if !` so the
+# nonzero status is consumed rather than aborting the run.
+
+echo ""
+echo "=== Test 32: --version prints the version on stdout and exits 0 ==="
+VER="$("$BIN_DIR/glyphsvg" --version 2>/dev/null || true)"
+if [ "$VER" = "1.1" ]; then report 0; else report 1; echo "(got '$VER')"; fi
+
+echo ""
+echo "=== Test 33: missing glyph exits nonzero and writes no file ==="
+if "$BIN_DIR/glyphsvg" --font=Helvetica U+1F600 100 --output="$TEST_DIR/missing.svg" 2>/dev/null; then
+    report 1
+    echo "(exited 0)"
+elif [ -f "$TEST_DIR/missing.svg" ]; then
+    report 1
+    echo "(wrote a file)"
+else
+    report 0
+fi
+
+echo ""
+echo "=== Test 34: unknown font exits nonzero instead of substituting ==="
+if "$BIN_DIR/glyphsvg" --font=NoSuchFontXYZ A 100 --output="$TEST_DIR/nofont.svg" 2>/dev/null; then
+    report 1
+    echo "(exited 0)"
+else
+    report 0
+fi
+
+echo ""
+echo "=== Test 35: installed fonts still resolve by family and PostScript name ==="
+FONT_OK=1
+for f in "Helvetica" "Helvetica-Bold" "Menlo" "Menlo-Regular"; do
+    "$BIN_DIR/glyphsvg" --font="$f" A 50 >/dev/null 2>&1 || FONT_OK=0
+done
+if [ "$FONT_OK" = "1" ]; then report 0; else report 1; fi
+
+echo ""
+echo "=== Test 36: blank glyphs in a string are tolerated, exit stays 0 ==="
+mkdir -p "$TEST_DIR/spaced"
+if "$BIN_DIR/glyphsvg" --font=Helvetica "Hi there" 100 --output="$TEST_DIR/spaced/" >/dev/null 2>&1; then
+    files_exist "$TEST_DIR/spaced/U+48_0.svg"
+else
+    report 1
+    echo "(exited nonzero)"
+fi
+
+echo ""
+echo "=== Test 37: unknown SF Symbols name exits nonzero ==="
+if "$BIN_DIR/glyphsvg" no_such_symbol_xyz bold 64 >/dev/null 2>&1; then
+    report 1
+    echo "(exited 0)"
+else
+    report 0
+fi
+
+echo ""
+echo "=== Test 38: partial failure exits nonzero but keeps the glyphs it got ==="
+mkdir -p "$TEST_DIR/partial"
+# The middle character (U+6F22) has no glyph in Helvetica, the outer two do.
+# ANSI-C quoting, not "..." - a plain double-quoted string leaves \x unexpanded.
+if "$BIN_DIR/glyphsvg" --font=Helvetica $'A\xe6\xbc\xa2B' 100 --output="$TEST_DIR/partial/" >/dev/null 2>&1; then
+    report 1
+    echo "(exited 0)"
+elif [ -f "$TEST_DIR/partial/U+41_0.svg" ] && [ -f "$TEST_DIR/partial/U+42_2.svg" ]; then
+    report 0
+else
+    report 1
+    echo "(lost the glyphs that did resolve)"
+fi
+
+echo ""
+echo "=== Test 39: an all-blank request exits nonzero ==="
+if "$BIN_DIR/glyphsvg" --font=Helvetica " " 100 --output="$TEST_DIR/blank.svg" >/dev/null 2>&1; then
+    report 1
+    echo "(exited 0)"
+elif [ -f "$TEST_DIR/blank.svg" ]; then
+    report 1
+    echo "(wrote a file)"
+else
+    report 0
+fi
+
+echo ""
+echo "=== Test 40: multiple glyphs to a single file is refused, not overwritten ==="
+# Distinct filename on purpose: the single-face set test above writes single.svg,
+# and a leftover from it would read here as "this run wrote a file".
+if "$BIN_DIR/glyphsvg" --font=Helvetica "Hi" 100 --output="$TEST_DIR/multi_into_one.svg" >/dev/null 2>&1; then
+    report 1
+    echo "(exited 0)"
+elif [ -f "$TEST_DIR/multi_into_one.svg" ]; then
+    report 1
+    echo "(wrote a file)"
+else
+    report 0
 fi
 
 echo ""
