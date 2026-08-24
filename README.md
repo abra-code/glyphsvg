@@ -42,11 +42,13 @@ which variation axes it declares, and only those axes are applied.
 GLYPHSVG_SET_PATH=./sets ./build/bin/glyphsvg --set=mdi home 256 --output=home.svg
 ```
 
-Two sets ship in `sets/`: `mdi` (Pictogrammers Material Design Icons, 7188
-icons) and `fluent` (Microsoft Fluent System Icons, 2819 outlined plus 2859
-filled). Both are static fonts. Their manifests and download scripts are
-committed; the fonts and codepoint maps are not, so run each set's
-`download.py` once - see `sets/README.md`.
+Three sets ship in `sets/`: `mdi` (Pictogrammers Material Design Icons, 7188
+icons), `fluent` (Microsoft Fluent System Icons, 2819 outlined plus 2859 filled)
+and `phosphor` (Phosphor Icons, 1512 icons in five weights). All are
+static fonts, so `--face` rather than `--weight` is the control; Phosphor is the
+one that offers a real weight ramp. Their manifests and download scripts are
+committed; the fonts and codepoint maps are not, so run each set's `download.py`
+once - see `sets/README.md`.
 
 Arguments: `--set=<name|dir> [--face=<face>] <name> [<weight>] <size>`
 

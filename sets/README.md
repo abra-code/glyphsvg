@@ -11,6 +11,7 @@ not (see `../.gitignore`), so run each set's `download.py` once before use:
 ```bash
 ./sets/mdi/download.py
 ./sets/fluent/download.py
+./sets/phosphor/download.py
 GLYPHSVG_SET_PATH=./sets ./build/bin/glyphsvg --set=mdi home 256 --output=home.svg
 ```
 
@@ -21,11 +22,18 @@ fetched, and without a built binary that check is skipped.
 |---|---|---|---|---|
 | `mdi` | 7188 | `regular` | 1.3 MB | Pictogrammers Free License (Apache 2.0 terms) |
 | `fluent` | 2819 + 2859 | `regular`, `filled` | 1.5 MB | MIT |
+| `phosphor` | 1512 x 5 | `thin`, `light`, `regular`, `bold`, `fill` | 2.4 MB | MIT |
 
-Both are static fonts: neither declares a variation axis, so `--weight`,
+All three are static fonts: none declares a variation axis, so `--weight`,
 `--fill` and `--axis` have nothing to act on and are reported as warnings. Use
-`--face` instead. `--info` reports `variable: no` for both, which is how a
-caller can tell a face list is the right control to offer.
+`--face` instead. `--info` reports `variable: no` for all of them, which is how
+a caller can tell a face list is the right control to offer.
+
+**Phosphor is the one that has weights.** MDI ships a single weight and Fluent
+two styles at one weight, so a weight control over either can only offer what is
+there. Icon artwork usually wants a heavier stroke than a UI icon font's default,
+and Phosphor supplies thin through bold plus a solid `fill` - as five separate
+fonts, so the weight is a face rather than an axis.
 
 ## mdi - Pictogrammers Material Design Icons
 
@@ -79,9 +87,61 @@ Coverage is not the same in both faces - 2811 icons exist in both, 8 are
 outline-only and 48 are filled-only - so a UI that keeps the selected name while
 switching face has to handle the name going missing.
 
+## phosphor - Phosphor Icons
+
+Five static fonts, one per weight, listed in the manifest light to heavy so a
+picker built from the face list reads as a ramp. 1512 icons in every face.
+
+Every face except `regular` suffixes its names upstream - the bold font calls its
+icons `acorn-bold`, `airplane-bold` - so the converter strips the suffix per
+face, and asserts it was there before stripping rather than letting the strip
+become a silent no-op if upstream's naming ever changes.
+
+All five faces share **one** codepoints table. Upstream assigns a given icon the
+same codepoint in every weight, so five separate tables were five identical
+files. `download.py` verifies the tables match and fails if they ever diverge,
+which is the point at which per-face tables would be needed again.
+
+`phosphor_metadata.json` carries the 18 icons that have aliases, in the same
+shape the MDI sidecar uses, so a search for "activity" finds `pulse` and one
+loader serves both sets.
+
+### Weight is a face here, and `--weight` is half-usable
+
+The face list mixes weight names with a style name (`fill`), so glyphsvg does not
+treat this set as weight-indexed. The consequence is asymmetric and worth stating
+plainly:
+
+- `--weight=bold` **does** select the bold face, and is equivalent to
+  `--face=bold`. Named weights are matched against face names.
+- `--weight=700` does **not**. A static font has no `wght` axis, so a numeric
+  weight is reported as an ignored-request warning and the default face renders.
+
+`--face` is the unambiguous control.
+
+### Why duotone is not here
+
+Phosphor publishes a sixth family, `duotone`, and it is deliberately not
+provisioned. Its two tones are not two paths inside one glyph - they are **two
+separate glyphs at consecutive codepoints**, and the codepoint `selection.json`
+publishes is the 20%-opacity tint layer, not the icon. Rendering it gives an
+unrecognizable blob; rendering `code + 1` gives something byte-identical to the
+regular face. So the choice would be shipping wrong artwork or shipping a
+duplicate. Carrying it properly needs two-glyph composition with per-path
+opacity, which glyphsvg does not do.
+
+The tell is visible in the data: 1504 of the 1512 duotone codepoints are even,
+because the space is allocated two per icon to leave the odd slot for the second
+layer.
+
+`download.py`'s render probe now compares the faces against each other rather
+than only checking that each produced a non-empty file, and refuses a face whose
+render is a small fraction of its siblings. That is what catches this class of
+defect - "it rendered something" never would.
+
 ## A note on trademarks
 
-Both sets include brand and company logos (`slack`, `github`, `microsoft` and
-many more). A permissive font license covers the artwork's copyright and grants
+All three sets include brand and company logos (`slack`, `github`,
+`apple-logo`, `windows-logo` and many more). A permissive font license covers the artwork's copyright and grants
 nothing on third-party trademarks. That distinction matters most for exactly the
 use this tool serves - an app icon is trademark use.
