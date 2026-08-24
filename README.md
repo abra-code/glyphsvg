@@ -38,9 +38,15 @@ Icons) are rendered by the same code path: the font is loaded from its file, ask
 which variation axes it declares, and only those axes are applied.
 
 ```bash
-./build/bin/glyphsvg --set=./fonts/mdi home 256 --output=home.svg
-GLYPHSVG_SET_PATH=./fonts ./build/bin/glyphsvg --set=mdi home 256 --output=home.svg
+./build/bin/glyphsvg --set=./sets/mdi home 256 --output=home.svg
+GLYPHSVG_SET_PATH=./sets ./build/bin/glyphsvg --set=mdi home 256 --output=home.svg
 ```
+
+Two sets ship in `sets/`: `mdi` (Pictogrammers Material Design Icons, 7188
+icons) and `fluent` (Microsoft Fluent System Icons, 2819 outlined plus 2859
+filled). Both are static fonts. Their manifests and download scripts are
+committed; the fonts and codepoint maps are not, so run each set's
+`download.py` once - see `sets/README.md`.
 
 Arguments: `--set=<name|dir> [--face=<face>] <name> [<weight>] <size>`
 

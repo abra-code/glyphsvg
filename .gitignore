@@ -1,9 +1,19 @@
 .DS_Store
 build
+__pycache__/
 
 # large upstream font assets (fetched by material/download.sh)
 material/*.ttf
 material/*.codepoints
 material/material_symbols_metadata.json
+
+# large upstream font assets (fetched by sets/*/download.py). The glyphset.conf
+# manifests and the download scripts ARE committed; the fonts, the generated
+# codepoint maps and the vendored licenses are not.
+sets/*/*.ttf
+sets/*/*.otf
+sets/*/*.codepoints
+sets/*/*_metadata.json
+sets/*/LICENSE
 
 Private/
