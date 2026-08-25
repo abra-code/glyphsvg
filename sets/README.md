@@ -1,8 +1,20 @@
 # Glyph Sets
 
-Each subdirectory here is a glyph set: a `glyphset.conf` manifest plus the icon
-font and name-to-codepoint tables it names. See the "Glyph sets" section of
+Each subdirectory here is a glyph set: a `glyphset.conf` manifest plus the font
+and name-to-codepoint tables it names. See the "Glyph sets" section of
 `../README.md` for the manifest format and how a set is found.
+
+There are **two kinds** of set here, and the difference is where the name table
+comes from:
+
+- **Icon fonts** (`mdi`, `fluent`, `phosphor`) map invented names onto
+  private-use codepoints, so the table has to come from the vendor. Each has its
+  own converter for whatever format that vendor publishes.
+- **Text fonts** (`nunito`, `alexandria`, `bungee`, `monaspace`) have the
+  mapping every reader already knows - their cmap. The table is generated from
+  the font itself and each entry is named for its character, so `Q 51`. These
+  exist for putting a letter or two on an app icon. They share one
+  implementation in `textfont.py`; a set's `download.py` is just its URLs.
 
 The manifests and the download scripts are committed. The fonts, the generated
 `.codepoints` maps, the metadata sidecars and the vendored `LICENSE` files are
@@ -12,11 +24,15 @@ not (see `../.gitignore`), so run each set's `download.py` once before use:
 ./sets/mdi/download.py
 ./sets/fluent/download.py
 ./sets/phosphor/download.py
+./sets/nunito/download.py
 GLYPHSVG_SET_PATH=./sets ./build/bin/glyphsvg --set=mdi home 256 --output=home.svg
+GLYPHSVG_SET_PATH=./sets ./build/bin/glyphsvg --set=nunito Q 256 --weight=900 --output=Q.svg
 ```
 
 Run `../build.sh` first if you can: each script render-probes the font it just
 fetched, and without a built binary that check is skipped.
+
+### Icon fonts
 
 | Set | Icons | Faces | Font | License |
 |---|---|---|---|---|
@@ -24,16 +40,39 @@ fetched, and without a built binary that check is skipped.
 | `fluent` | 2819 + 2859 | `regular`, `filled` | 1.5 MB | MIT |
 | `phosphor` | 1512 x 5 | `thin`, `light`, `regular`, `bold`, `fill` | 2.4 MB | MIT |
 
-All three are static fonts: none declares a variation axis, so `--weight`,
-`--fill` and `--axis` have nothing to act on and are reported as warnings. Use
-`--face` instead. `--info` reports `variable: no` for all of them, which is how
-a caller can tell a face list is the right control to offer.
+All three are static: none declares a variation axis, so `--weight`, `--fill`
+and `--axis` have nothing to act on and are reported as warnings. Use `--face`.
+`--info` reports `variable: no`, which is how a caller knows to offer a face
+list rather than a weight control.
 
-**Phosphor is the one that has weights.** MDI ships a single weight and Fluent
-two styles at one weight, so a weight control over either can only offer what is
-there. Icon artwork usually wants a heavier stroke than a UI icon font's default,
-and Phosphor supplies thin through bold plus a solid `fill` - as five separate
-fonts, so the weight is a face rather than an axis.
+**Phosphor is the icon font that has weights.** MDI ships a single weight and
+Fluent two styles at one weight. Icon artwork usually wants a heavier stroke
+than a UI icon font's default, and Phosphor supplies thin through bold plus a
+solid `fill` - as five separate fonts, so its weight is a face, not an axis.
+
+### Text fonts
+
+| Set | Characters | Weight | Font | License |
+|---|---|---|---|---|
+| `nunito` | 901 | axis `wght` 200..1000 | 270 KB | OFL 1.1 |
+| `alexandria` | 918 | axis `wght` 100..900 | 324 KB | OFL 1.1 |
+| `bungee` | 707 | static, single weight | 116 KB | OFL 1.1 |
+| `monaspace` | 2366 | axis `wght` 200..800 | 1.3 MB | OFL 1.1 |
+
+Three of the four are **variable**, so here `--weight` is the control and takes
+a number anywhere in the declared range. `--info` reports `variable: yes` and an
+`axis: wght <min> <default> <max>` line, which is what a caller should build a
+weight control from.
+
+Building it from the named weights instead caps it short: named weights are the
+SF Symbols names, `black` is the heaviest, and `black` maps to 900. Nunito's
+axis runs to **1000**, and 1000 is visibly heavier than 900 - so a fixed name
+list cannot reach the heaviest weight the font has.
+
+Character counts are lower than each font's cmap because controls, separators,
+combining marks and unassigned codepoints are dropped: a `.codepoints` name
+cannot contain whitespace, and a lone combining accent renders as a mark
+floating over nothing.
 
 ## mdi - Pictogrammers Material Design Icons
 
@@ -139,9 +178,47 @@ than only checking that each produced a non-empty file, and refuses a face whose
 render is a small fraction of its siblings. That is what catches this class of
 defect - "it rendered something" never would.
 
+## The text fonts
+
+`textfont.py` does the work for all four. It downloads the font, reads its cmap,
+writes `<char> <hex>` per line, and puts the Unicode character name in the
+metadata sidecar as search tags - so searching "capital q" or "latin" finds `Q`
+without the picker listing every character twice.
+
+It reads the cmap itself rather than using fontTools. These four would otherwise
+be the only part of this repo needing a pip install, and cmap formats 4 and 12
+are about eighty lines; the table has the same layout in `.ttf` and `.otf`, since
+cmap is independent of how outlines are stored. The reader was checked against
+fontTools on eight fonts including a CFF/OTF one and an 8201-codepoint CJK one,
+matching on every codepoint and every glyph id.
+
+The render probe checks something the icon sets cannot: that the weight axis is
+actually applied. A set that resolves, renders, and silently ignores `--weight`
+would leave a weight control inert with nothing to show for it, so the probe
+renders at both ends of the declared axis and fails if the two are identical.
+
+- **`nunito`** - the rounded one. Soft terminals, and the widest weight axis of
+  anything surveyed.
+- **`alexandria`** - the plain geometric sans. Chosen over Outfit and Archivo
+  because its counters stay open longest as the icon shrinks.
+- **`bungee`** - drawn for signage. The only face that keeps a three-letter word
+  legible at a 16px icon. Static, and already heavy.
+- **`monaspace`** - monospace, and the most distinctive `Q` of anything
+  surveyed: a long detached tail that stays unambiguous where most faces blur
+  into an `O`. Installed without the spaces upstream puts in its filename,
+  because `glyphset.conf` filenames may not contain any.
+
+### One caution on Q
+
+`Q` is the hardest character to keep legible when an icon shrinks, because the
+tail is the only thing separating it from `O` and it is a thin appendage on a
+heavy bowl. Bungee is the best of these four for a three-letter word and among
+the **worst** for a solo `Q` - its tail is a small nub that merges into the bowl
+below about 32px. Check the actual character at the actual size.
+
 ## A note on trademarks
 
-All three sets include brand and company logos (`slack`, `github`,
+The three icon sets include brand and company logos (`slack`, `github`,
 `apple-logo`, `windows-logo` and many more). A permissive font license covers the artwork's copyright and grants
 nothing on third-party trademarks. That distinction matters most for exactly the
 use this tool serves - an app icon is trademark use.

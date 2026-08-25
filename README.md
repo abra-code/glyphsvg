@@ -40,15 +40,29 @@ which variation axes it declares, and only those axes are applied.
 ```bash
 ./build/bin/glyphsvg --set=./sets/mdi home 256 --output=home.svg
 GLYPHSVG_SET_PATH=./sets ./build/bin/glyphsvg --set=mdi home 256 --output=home.svg
+GLYPHSVG_SET_PATH=./sets ./build/bin/glyphsvg --set=nunito Q 256 --weight=900 --output=Q.svg
 ```
 
-Three sets ship in `sets/`: `mdi` (Pictogrammers Material Design Icons, 7188
-icons), `fluent` (Microsoft Fluent System Icons, 2819 outlined plus 2859 filled)
-and `phosphor` (Phosphor Icons, 1512 icons in five weights). All are
-static fonts, so `--face` rather than `--weight` is the control; Phosphor is the
-one that offers a real weight ramp. Their manifests and download scripts are
-committed; the fonts and codepoint maps are not, so run each set's `download.py`
-once - see `sets/README.md`.
+Seven sets ship in `sets/`, in two kinds.
+
+**Icon fonts**, whose symbols are named pictograms and whose name tables come
+from the vendor: `mdi` (Pictogrammers Material Design Icons, 7188 icons),
+`fluent` (Microsoft Fluent System Icons, 2819 outlined plus 2859 filled) and
+`phosphor` (Phosphor Icons, 1512 icons in five weights). All three are static,
+so `--face` rather than `--weight` is the control; Phosphor is the one with a
+real weight ramp.
+
+**Text fonts**, whose symbols are characters - for putting a letter or two on an
+app icon: `nunito` (rounded, `wght` 200..1000), `alexandria` (geometric sans,
+`wght` 100..900), `bungee` (signage display, static) and `monaspace` (Monaspace
+Krypton, monospace, `wght` 200..800). Their name tables are generated from the
+font's own cmap, and each entry is named for its character, so a symbol name is
+simply `Q`. Three of the four are variable, so `--weight` here takes a number
+anywhere in the declared range.
+
+Every set's manifest and download script is committed; the fonts and the
+codepoint maps are not, so run each set's `download.py` once - see
+`sets/README.md`.
 
 Arguments: `--set=<name|dir> [--face=<face>] <name> [<weight>] <size>`
 
