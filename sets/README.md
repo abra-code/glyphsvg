@@ -10,11 +10,22 @@ comes from:
 - **Icon fonts** (`mdi`, `fluent`, `phosphor`) map invented names onto
   private-use codepoints, so the table has to come from the vendor. Each has its
   own converter for whatever format that vendor publishes.
-- **Text fonts** (`nunito`, `alexandria`, `bungee`, `monaspace`) have the
+- **Text fonts** (`nunito`, `alexandria`, `bungee`, `monaspace`, `notoemoji`) have the
   mapping every reader already knows - their cmap. The table is generated from
   the font itself and each entry is named for its character, so `Q 51`. These
   exist for putting a letter or two on an app icon. They share one
   implementation in `textfont.py`; a set's `download.py` is just its URLs.
+
+Each manifest also declares a `kind` (`icon` or `text`) and a one-line `license`
+name, both reported by `--info`, so a picker can group the sets and name their
+terms without keeping its own copy of this table.
+
+`kind` is close to the split above but is **not** the same question, and
+`notoemoji` is where they differ: its table comes from a cmap, so it sits with
+the text fonts here, but its symbols are pictographs, so it declares `kind =
+icon` and a picker groups it with the icon fonts. This section is about where a
+name table comes from; `kind` is about what a person is choosing when they pick
+that set.
 
 The manifests and the download scripts are committed. The fonts, the generated
 `.codepoints` maps, the metadata sidecars and the vendored `LICENSE` files are
@@ -58,8 +69,9 @@ solid `fill` - as five separate fonts, so its weight is a face, not an axis.
 | `alexandria` | 918 | axis `wght` 100..900 | 324 KB | OFL 1.1 |
 | `bungee` | 707 | static, single weight | 116 KB | OFL 1.1 |
 | `monaspace` | 2366 | axis `wght` 200..800 | 1.3 MB | OFL 1.1 |
+| `notoemoji` | 1424 | axis `wght` 300..700 | 1.9 MB | OFL 1.1 |
 
-Three of the four are **variable**, so here `--weight` is the control and takes
+Four of the five are **variable**, so here `--weight` is the control and takes
 a number anywhere in the declared range. `--info` reports `variable: yes` and an
 `axis: wght <min> <default> <max>` line, which is what a caller should build a
 weight control from.
@@ -207,6 +219,61 @@ renders at both ends of the declared axis and fails if the two are identical.
   surveyed: a long detached tail that stays unambiguous where most faces blur
   into an `O`. Installed without the spaces upstream puts in its filename,
   because `glyphset.conf` filenames may not contain any.
+- **`notoemoji`** - monochrome emoji, and the only set here whose symbols are
+  pictographs rather than letters. See below.
+
+### notoemoji, and why it is not a colour emoji font
+
+glyphsvg extracts outlines. Colour emoji fonts have none to extract:
+
+| Font | Stores its artwork as | Extractable |
+|---|---|---|
+| Noto Color Emoji | `CBDT`/`CBLC` PNG bitmaps | no |
+| Apple Color Emoji | `sbix` PNG bitmaps | no (and not redistributable) |
+| Twemoji, OpenMoji colour | `COLR`/`CPAL` layers or `SVG ` | no |
+| **Noto Emoji** | **`glyf` outlines, no colour tables** | **yes** |
+
+Noto Emoji is the monochrome sibling, and it carries a real `wght` axis, so the
+same weight control drives it.
+
+It covers emoji, **not** the general symbol blocks: there is no star in it,
+because a star is not an emoji. Noto Sans Symbols and Symbols 2 do have those,
+and are deliberately not here - every icon-relevant character they carry is
+already in `mdi`, drawn as an icon rather than as a text symbol, while roughly a
+fifth of their bulk is Braille, dominoes, mahjong, chess and alchemy. What is
+useful is also split across the two files, with 314 codepoints duplicated.
+
+### CLDR keywords
+
+`notoemoji` is the one set that fetches a second data source. Unicode names are
+formal - the page emoji is `PAGE FACING UP` - so an index built from names alone
+answers neither "document" nor "search". CLDR publishes English keywords per
+codepoint, and merging them is what makes the picker usable:
+
+```
+            names only              with CLDR
+document    (nothing)            ->  page, page facing up, identification card
+search      (nothing)            ->  magnifying glass tilted left, and right
+time        one hit              ->  watch, hourglass, alarm clock, stopwatch, timer
+```
+
+The keywords are added **alongside** the Unicode words, not instead of them, so
+searching by formal name still works. Cost is about 50 KB in the sidecar,
+against a 1.9 MB font.
+
+Only `common/annotations/en.xml` is fetched. Its sibling
+`common/annotationsDerived/en.xml` is 550 KB and yields exactly **one** usable
+entry: every other record is a multi-codepoint sequence (skin tones, ZWJ
+combinations), and a `.codepoints` name is a single character, so a sequence can
+never match one.
+
+This is an emoji annotation set, not a general Unicode one, which is why no
+other set passes a `cldr_url`. Measured coverage: 97.5% of Noto Emoji, against
+10-18% of the Latin text fonts, where the hits are punctuation.
+
+`provision()` fails if coverage falls below 50%, because the symptom of the
+wrong file arriving is a picker that searches slightly worse - which nobody
+would trace back to here.
 
 ### One caution on Q
 

@@ -43,7 +43,7 @@ GLYPHSVG_SET_PATH=./sets ./build/bin/glyphsvg --set=mdi home 256 --output=home.s
 GLYPHSVG_SET_PATH=./sets ./build/bin/glyphsvg --set=nunito Q 256 --weight=900 --output=Q.svg
 ```
 
-Seven sets ship in `sets/`, in two kinds.
+Eight sets ship in `sets/`, in two kinds.
 
 **Icon fonts**, whose symbols are named pictograms and whose name tables come
 from the vendor: `mdi` (Pictogrammers Material Design Icons, 7188 icons),
@@ -54,11 +54,12 @@ real weight ramp.
 
 **Text fonts**, whose symbols are characters - for putting a letter or two on an
 app icon: `nunito` (rounded, `wght` 200..1000), `alexandria` (geometric sans,
-`wght` 100..900), `bungee` (signage display, static) and `monaspace` (Monaspace
-Krypton, monospace, `wght` 200..800). Their name tables are generated from the
-font's own cmap, and each entry is named for its character, so a symbol name is
-simply `Q`. Three of the four are variable, so `--weight` here takes a number
-anywhere in the declared range.
+`wght` 100..900), `bungee` (signage display, static), `monaspace` (Monaspace
+Krypton, monospace, `wght` 200..800) and `notoemoji` (monochrome emoji, `wght`
+300..700). Their name tables are generated from the font's own cmap, and each
+entry is named for its character, so a symbol name is simply `Q` - or `🚀`. Four
+of the five are variable, so `--weight` here takes a number anywhere in the
+declared range.
 
 Every set's manifest and download script is committed; the fonts and the
 codepoint maps are not, so run each set's `download.py` once - see
@@ -87,6 +88,8 @@ starts a comment:
 | Key | Meaning |
 |---|---|
 | `title` | human readable set name, reported by `--info` |
+| `license` | one-line license name, for a caller to show beside the set |
+| `kind` | `icon` (pictograms) or `text` (characters), matched case-blind and reported lowercase; default `icon` |
 | `font` | font filename, for a set with a single face |
 | `codepoints` | default codepoints filename, used by faces that omit their own |
 | `metadata` | optional search-metadata filename, for callers to read |
@@ -104,11 +107,27 @@ A static family, one file per weight:
 
 ```
 title      = Material Design Icons
+license    = Pictogrammers Free License (Apache 2.0 terms)
+kind       = icon
 codepoints = mdi.codepoints
 face = light    mdi-light.ttf
 face = regular  mdi-regular.ttf
 face = bold     mdi-bold.ttf
 ```
+
+`license` and `kind` are for the caller, not for rendering. A picker offering
+eight fonts has to say what each one's terms are and has to keep pictogram sets
+apart from character sets, and reading that out of the manifest is what stops a
+second copy of the same table living in the UI and drifting from this one. An
+unrecognized `kind` is a warning and falls back to `icon`; a set that names
+neither key still resolves, since every set predating them is an icon font.
+
+`kind` answers what a set's symbols ARE, not how its name table was built. Those
+usually agree - a vendor table means pictograms, a cmap means characters - but
+`notoemoji` is the case where they part: its table comes from the font's own
+cmap like any text font's, and its symbols are pictographs, so it is `kind =
+icon`. The provisioning detail is not what a person choosing artwork is sorting
+by.
 
 A single-face set:
 
@@ -219,6 +238,8 @@ variable and static fonts:
 $ glyphsvg --material=rounded --info
 set: material
 title: Google Material Symbols
+license: Apache License 2.0
+kind: icon
 dir: /path/to/material
 faces: Outlined Rounded Sharp
 face: Rounded

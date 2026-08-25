@@ -708,6 +708,8 @@ typedef struct {
     char name[64];
     char dir[1024];
     char title[128];
+    char license[128];    // one-line license name, for a caller to show beside the set
+    char kind[16];         // "icon" or "text"; what the symbols are, not how they render
     char metadataFile[256];
     char defaultFace[64]; // face to prefer when none is requested; may be absent
     GlyphFace faces[MAX_FACES];
@@ -729,6 +731,10 @@ static void fillBuiltinMaterialSet(GlyphSet *set) {
     if (set->metadataFile[0] == '\0') {
         snprintf(set->metadataFile, sizeof(set->metadataFile), "material_symbols_metadata.json");
     }
+    if (set->license[0] == '\0') {
+        snprintf(set->license, sizeof(set->license), "Apache License 2.0");
+    }
+    if (set->kind[0] == '\0') snprintf(set->kind, sizeof(set->kind), "icon");
     if (set->defaultFace[0] == '\0') {
         snprintf(set->defaultFace, sizeof(set->defaultFace), "%s", materialStyles[0]);
     }
@@ -770,6 +776,8 @@ static char *nextToken(char **cursor) {
 // Parses <dir>/glyphset.conf. One "key = value" per line, '#' starts a comment:
 //
 //   title      = human readable set name
+//   license    = one-line license name, e.g. "SIL Open Font License 1.1"
+//   kind       = "icon" (named pictograms) or "text" (characters); default "icon"
 //   font       = font filename, for a set with a single face
 //   codepoints = default codepoints filename, used by faces that omit their own
 //   metadata   = optional search metadata filename (for callers, not read here)
@@ -831,6 +839,23 @@ static int parseSetManifest(const char *dir, GlyphSet *set) {
             snprintf(set->metadataFile, sizeof(set->metadataFile), "%s", value);
         } else if (strcasecmp(key, "title") == 0) {
             snprintf(set->title, sizeof(set->title), "%s", value);
+        } else if (strcasecmp(key, "license") == 0) {
+            snprintf(set->license, sizeof(set->license), "%s", value);
+        } else if (strcasecmp(key, "kind") == 0) {
+            // Anything else is a typo, and silently accepting it would put an
+            // unknown word where a caller expects one of two.
+            // Stored lowercased, not as written: the comparison here is
+            // case-blind, so accepting "ICON" and then reporting it verbatim
+            // would hand a caller a value its own comparison misses - and the
+            // symptom is a set quietly sorted into the wrong group, not an error.
+            if (strcasecmp(value, "icon") == 0) {
+                snprintf(set->kind, sizeof(set->kind), "icon");
+            } else if (strcasecmp(value, "text") == 0) {
+                snprintf(set->kind, sizeof(set->kind), "text");
+            } else {
+                fprintf(stderr, "Warning: %s: 'kind' is 'icon' or 'text', not '%s'; using icon\n",
+                        path, value);
+            }
         }
     }
     fclose(fp);
@@ -846,6 +871,9 @@ static int parseSetManifest(const char *dir, GlyphSet *set) {
             snprintf(set->faces[i].codepointsFile, sizeof(set->faces[i].codepointsFile), "%s", defaultCodepoints);
         }
     }
+    // Every set that predates this key is an icon font, so that is the default a
+    // silent manifest means.
+    if (set->kind[0] == '\0') snprintf(set->kind, sizeof(set->kind), "icon");
     return set->nFaces > 0;
 }
 
@@ -1400,6 +1428,8 @@ int main(int argc, const char *argv[]) {
         if (mode == MODE_GLYPH_SET) {
             printf("set: %s\n", set.name);
             if (set.title[0] != '\0') printf("title: %s\n", set.title);
+            if (set.license[0] != '\0') printf("license: %s\n", set.license);
+            if (set.kind[0] != '\0') printf("kind: %s\n", set.kind);
             printf("dir: %s\n", set.dir);
             printf("faces: ");
             printFaceList(stdout, &set);

@@ -213,7 +213,61 @@ def build_tables(font_path):
     return rows, skipped
 
 
-def write_tables(rows, codepoints_path, metadata_path):
+# ---------------------------------------------------------------------------
+# CLDR emoji annotations
+#
+# Unicode character names are formal, not colloquial: the page emoji is called
+# PAGE FACING UP, so a picker search for "document" finds nothing. CLDR
+# publishes human keywords per codepoint - "document | facing | page | paper" -
+# which turns the sidecar from a restatement of the name into something worth
+# searching.
+#
+# This is an EMOJI annotation set, not a general Unicode one, and the numbers
+# say so: it annotates 97.5% of Noto Emoji and 10-18% of the Latin text fonts,
+# where the hits are punctuation and the letters have nothing useful to say. So
+# only emoji sets pass a cldr_url.
+#
+# Only common/annotations/en.xml is worth fetching. Its sibling
+# common/annotationsDerived/en.xml is 550KB and yields exactly ONE usable entry:
+# every other record is a multi-codepoint sequence (skin tones, ZWJ combos),
+# and a .codepoints name is a single character, so a sequence can never match.
+# ---------------------------------------------------------------------------
+
+def load_cldr(path):
+    """Return {character: [keyword, ...]} from a CLDR annotations XML file.
+
+    Both the keyword list and the 'tts' short name are collected: the keywords
+    are the searchable synonyms, the tts name is the colloquial one ("red heart"
+    where Unicode says HEAVY BLACK HEART)."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as exc:
+        # A captive portal answers 200 with HTML, exactly as it does for a font.
+        fail("%s is not parseable XML (%s) - the download was intercepted or "
+             "the format changed" % (os.path.basename(path), exc))
+    out = {}
+    for node in root.iter("annotation"):
+        cp = node.get("cp") or ""
+        # Sequences cannot appear in a .codepoints table, whose names are one
+        # character each. Skipping them here is what makes the coverage number
+        # below mean what it says.
+        if len(cp) != 1:
+            continue
+        text = (node.text or "").strip()
+        if not text:
+            continue
+        parts = text.split() if node.get("type") == "tts" else \
+            [t.strip() for t in text.split("|") if t.strip()]
+        out.setdefault(cp, []).extend(parts)
+    if not out:
+        fail("%s parsed but held no single-character annotations - the CLDR "
+             "format has changed" % os.path.basename(path))
+    return out
+
+
+def write_tables(rows, codepoints_path, metadata_path, cldr=None):
     with open(codepoints_path, "w") as f:
         for ch, cp, _ in rows:
             f.write("%s %x\n" % (ch, cp))
@@ -223,10 +277,22 @@ def write_tables(rows, codepoints_path, metadata_path):
         # searching "capital q" or just "latin" finds it. The U+ form is there
         # for anyone who thinks in codepoints.
         tags = [t.lower() for t in uname.replace("-", " ").split()] if uname else []
+        if cldr:
+            # Kept ALONGSIDE the Unicode words rather than replacing them, so a
+            # search by formal name still works. A CLDR keyword can be a phrase
+            # ("left-pointing", "grinning face"), and the search index matches
+            # whole words, so phrases are split rather than stored intact.
+            for keyword in cldr.get(ch, []):
+                tags.extend(t.lower() for t in keyword.replace("-", " ").split())
         tags.append("u+%04x" % cp)
-        icons.append({"name": ch, "tags": tags, "categories": []})
+        # Sorted and de-duplicated: CLDR repeats words between its keyword list
+        # and its tts name, and an unsorted list makes regenerated sidecars
+        # differ for no reason.
+        icons.append({"name": ch, "tags": sorted(set(tags)), "categories": []})
     with open(metadata_path, "w") as f:
-        json.dump({"icons": icons}, f, separators=(",", ":"))
+        # ensure_ascii=False keeps emoji as themselves rather than \uXXXX pairs,
+        # which is both smaller and readable in a diff.
+        json.dump({"icons": icons}, f, separators=(",", ":"), ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -326,9 +392,20 @@ def install(script_dir, stage, names):
         os.replace(pending, final)
 
 
+# A CLDR fetch that annotates almost nothing means the wrong file arrived or the
+# format moved, and the symptom - a picker that searches slightly worse - is one
+# nobody would trace back here. Emoji sets run at ~97%, so this floor is far
+# below anything healthy and still catches a silent regression.
+CLDR_MIN_COVERAGE = 0.5
+
+
 def provision(script_dir, font_url, font_name, codepoints_name, metadata_name,
-              license_url=None, license_name="LICENSE", samples="QAg8"):
-    """Fetch one text font, generate its tables, probe it, install it."""
+              license_url=None, license_name="LICENSE", samples="QAg8",
+              cldr_url=None):
+    """Fetch one text font, generate its tables, probe it, install it.
+
+    cldr_url, when given, adds CLDR keywords to the metadata sidecar. Pass it
+    only for an emoji set - see the note above load_cldr."""
     installed = [font_name, codepoints_name, metadata_name]
     stage = tempfile.mkdtemp(prefix="textfont.")
     try:
@@ -337,8 +414,22 @@ def provision(script_dir, font_url, font_name, codepoints_name, metadata_name,
         check_font(font_path)
 
         rows, skipped = build_tables(font_path)
+        cldr = None
+        if cldr_url:
+            annotations = os.path.join(stage, "cldr-annotations.xml")
+            download(cldr_url, annotations, quiet=True)
+            cldr = load_cldr(annotations)
+            hit = sum(1 for ch, _, _ in rows if ch in cldr)
+            share = float(hit) / len(rows)
+            if share < CLDR_MIN_COVERAGE:
+                fail("CLDR annotates only %d of %d characters (%.1f%%), below "
+                     "the %.0f%% floor - the wrong file arrived, or the format "
+                     "changed" % (hit, len(rows), share * 100,
+                                  CLDR_MIN_COVERAGE * 100))
+            print("  CLDR keywords for %d of %d characters (%.1f%%)"
+                  % (hit, len(rows), share * 100))
         write_tables(rows, os.path.join(stage, codepoints_name),
-                     os.path.join(stage, metadata_name))
+                     os.path.join(stage, metadata_name), cldr)
         named = sum(1 for _, _, u in rows if u)
         print("  %d characters (%d non-printing skipped, %d with Unicode names)"
               % (len(rows), skipped, named))
@@ -367,16 +458,18 @@ def provision(script_dir, font_url, font_name, codepoints_name, metadata_name,
 # check what a font would contribute before adding a set for it, or to diff a
 # regenerated table against the installed one after changing the filters.
 #
-#   python3 sets/textfont.py <font.ttf> [<out.codepoints> <out_metadata.json>]
+#   python3 sets/textfont.py <font.ttf> [<out.codepoints> <out_metadata.json>
+#                                        [<cldr-annotations.xml>]]
 #
-# With no output paths it reports what it found and writes nothing.
+# With no output paths it reports what it found and writes nothing. A CLDR
+# annotations file is optional and only meaningful for an emoji font.
 # ---------------------------------------------------------------------------
 
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         sys.stderr.write(
             "usage: textfont.py <font.ttf|.otf> [<out.codepoints> "
-            "<out_metadata.json>]\n"
+            "<out_metadata.json> [<cldr-annotations.xml>]]\n"
             "  With no output paths, reports coverage and writes nothing.\n")
         return 2
     font = argv[0]
@@ -391,9 +484,15 @@ def main(argv):
           % (" ".join(r[0] for r in rows[:12]), " ".join(r[0] for r in rows[-6:])))
     if len(argv) == 1:
         return 0
-    if len(argv) != 3:
+    if len(argv) not in (3, 4):
         fail("give BOTH output paths, or neither")
-    write_tables(rows, argv[1], argv[2])
+    cldr = None
+    if len(argv) == 4:
+        cldr = load_cldr(argv[3])
+        hit = sum(1 for ch, _, _ in rows if ch in cldr)
+        print("  CLDR keywords for %d of %d characters (%.1f%%)"
+              % (hit, len(rows), 100.0 * hit / len(rows)))
+    write_tables(rows, argv[1], argv[2], cldr)
     print("  wrote %s and %s" % (argv[1], argv[2]))
     return 0
 
